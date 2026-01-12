@@ -30,8 +30,18 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files (can opt-in for committing if needed)
-.env*
+# local env files (Kişisel anahtarlar - ASLA YÜKLEME)
+.env*.local
+
+# development
+.env.development.local
+.env.test.local
+.env.production.local
+
+# npm/yarn logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
 
 # vercel
 .vercel
