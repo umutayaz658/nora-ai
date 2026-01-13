@@ -2,52 +2,52 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 import { NextResponse } from "next/server";
 import { GoalGraphData } from "@/types/goal";
 
-// --- AYARLAR ---
-// API Key ve Model ismini ortam değişkenlerinden (env) çekiyoruz
+// --- PRISMA CLIENT SETUP (SAFE) ---
+// Initialize safely to prevent runtime crash if generation failed
+let prisma: any = null;
+try {
+    // Dynamic require to prevent crash if module is missing/corrupt
+    // @ts-ignore
+    const { PrismaClient } = require("@prisma/client");
+
+    // @ts-ignore
+    const globalForPrisma = global as unknown as { prisma: any };
+    // @ts-ignore
+    prisma = globalForPrisma.prisma || new PrismaClient();
+    // @ts-ignore
+    if (process.env.NODE_ENV !== "production") globalForPrisma.prisma = prisma;
+} catch (e) {
+    console.warn("Prisma Client failed to initialize. Persistence disabled.", e);
+}
+
+// --- CONFIG ---
 const apiKey = process.env.GOOGLE_API_KEY;
-const modelName = process.env.GOOGLE_AI_MODEL || "gemini-1.5-flash"; // Eğer env yoksa varsayılanı kullan
+const modelName = process.env.GOOGLE_AI_MODEL || "gemini-1.5-flash"; // Fallback model
 
 const genAI = apiKey ? new GoogleGenerativeAI(apiKey) : null;
 const model = genAI ? genAI.getGenerativeModel({ model: modelName }) : null;
 
-// --- MOCK DATA (Yedek Veri) ---
+// --- MOCK DATA (Fallback) ---
 const MOCK_DATA: GoalGraphData = {
     nodes: [
         {
             id: "root",
-            title: "Master Full Stack Development (MOCK DATA)",
-            description: "Journey to becoming a professional software engineer.",
-            status: "in_progress",
-            progress: 35,
-            widgets: [
-                {
-                    type: "rich_text",
-                    id: "w-root-1",
-                    content: "API Key hatası veya Model hatası alındı. Bu sahte veridir. Lütfen .env dosyanızı kontrol edin."
-                },
-                {
-                    type: "progress_bar",
-                    id: "w-root-2",
-                    title: "Overall Mastery",
-                    currentValue: 35,
-                    targetValue: 100,
-                    unit: "%"
-                }
-            ]
+            title: "System Error (Mock)",
+            description: "Could not connect to AI services.",
+            status: "pending",
+            progress: 0,
+            widgets: []
         },
-        // ... (Diğer mock node'lar burada kalabilir, kodun kısalığı için kestim)
         {
             id: "sub-1",
-            title: "Check Your API Key",
-            description: "If you see this, the AI connection failed.",
+            title: "Check Logs",
+            description: "Please check your server logs for details.",
             status: "pending",
             progress: 0,
             widgets: []
         }
     ],
-    links: [
-        { source: "root", target: "sub-1" }
-    ]
+    links: [{ source: "root", target: "sub-1" }]
 };
 
 const SYSTEM_PROMPT = `
@@ -88,29 +88,76 @@ export async function POST(req: Request) {
     try {
         const { prompt } = await req.json();
 
-        // API Key veya Model yoksa Mock Data dön
+        // 1. Validate Config
         if (!model) {
             console.warn("Gemini API key or Model not configured, returning mock data.");
-            await new Promise(resolve => setTimeout(resolve, 1500));
             return NextResponse.json(MOCK_DATA);
         }
 
+        // 2. Generate Content
         const msg = `User Goal: "${prompt}". Please generate a detailed, widget-rich strategic plan (GoalGraphData) for this goal.`;
-
-        // Modelden cevap iste
         const result = await model.generateContent([SYSTEM_PROMPT, msg]);
         const response = await result.response;
         const text = response.text();
-
-        // JSON temizle
         const cleanJson = text.replace(/```json/g, '').replace(/```/g, '').trim();
+        const graphData: GoalGraphData = JSON.parse(cleanJson);
 
-        const data = JSON.parse(cleanJson);
+        // 3. Save to Database (Attempt)
+        if (prisma) {
+            try {
+                // Create the Roadmap container
+                const roadmap = await prisma.roadmap.create({
+                    data: {
+                        title: prompt,
+                        goal: prompt
+                    }
+                });
 
-        return NextResponse.json(data);
+                const idMap = new Map<string, string>(); // AI_ID -> DB_UUID
+
+                // First pass: Create Nodes
+                for (const node of graphData.nodes) {
+                    const dbNode = await prisma.node.create({
+                        data: {
+                            title: node.title,
+                            description: node.description || "",
+                            status: node.status || "pending",
+                            progress: node.progress || 0,
+                            widgets: JSON.stringify(node.widgets || []),
+                            roadmapId: roadmap.id
+                        }
+                    });
+                    idMap.set(node.id, dbNode.id);
+                }
+
+                // Second pass: Update Links
+                for (const link of graphData.links) {
+                    const sourceUUID = idMap.get(link.source);
+                    const targetUUID = idMap.get(link.target);
+
+                    if (sourceUUID && targetUUID) {
+                        await prisma.node.update({
+                            where: { id: targetUUID },
+                            data: { parentId: sourceUUID }
+                        });
+                    }
+                }
+
+                // Success: Return Persistent ID
+                return NextResponse.json({ roadmapId: roadmap.id });
+
+            } catch (dbError) {
+                console.error("Database persistence failed (falling back to ephemeral mode):", dbError);
+                // Fallback: Return raw data so user can still see the graph
+                return NextResponse.json(graphData);
+            }
+        } else {
+            console.warn("Prisma not initialized. Returning ephemeral data.");
+            return NextResponse.json(graphData);
+        }
+
     } catch (error) {
         console.error("AI Generation Error:", error);
-        // Hata durumunda Mock Data dön
-        return NextResponse.json(MOCK_DATA);
+        return NextResponse.json({ error: "Failed to generate roadmap" }, { status: 500 });
     }
 }

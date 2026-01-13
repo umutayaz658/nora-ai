@@ -11,14 +11,17 @@ interface PlanetViewProps {
 export default function PlanetView({ node, onBack }: PlanetViewProps) {
     if (!node) return null;
 
+    console.log("PlanetView render with:", node);
+
     return (
         // OVERLAY CONTAINER: Transparent, Pass-through clicks
         <motion.div
+            key={node.id}
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.8 }}
-            className="fixed inset-0 z-50 flex flex-col pointer-events-none"
+            className="fixed inset-0 z-30 flex flex-col pointer-events-none"
         >
             <style jsx global>{`
                 .scrollbar-hide::-webkit-scrollbar {

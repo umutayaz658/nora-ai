@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, useCallback } from "react"
 import dynamic from "next/dynamic"
+import { useRouter, useSearchParams } from "next/navigation"
 import { GoalNodeData, GoalGraphData } from "@/types/goal"
 
 // SSR Kapalı Import
@@ -37,14 +38,26 @@ interface GraphData {
 }
 
 interface GoalGraphProps {
-    initialGoal: string;
+    initialGoal?: string;
+    initialData?: GoalGraphData; // PERSISTENCE: Data from DB
     onNodeClick?: (node: GoalNodeData) => void;
     focusedNodeId?: string | null;
 }
 
-export default function GoalGraph({ initialGoal, onNodeClick, focusedNodeId }: GoalGraphProps) {
+export default function GoalGraph({ initialGoal, initialData, onNodeClick, focusedNodeId }: GoalGraphProps) {
     const containerRef = useRef<HTMLDivElement>(null)
     const graphRef = useRef<any>(null)
+    const searchParams = useSearchParams();
+    // 1. Durumu dondur (URL değişse bile bu bileşen için 'yeni' kalmalı)
+    const [isNew] = useState(() => searchParams.get('new') === 'true');
+
+    // 2. URL'i temizle (Refresh atınca tekrar animasyon olmasın diye)
+    useEffect(() => {
+        if (isNew) {
+            const newUrl = window.location.pathname;
+            window.history.replaceState({}, '', newUrl);
+        }
+    }, [isNew]);
 
     const [data, setData] = useState<GraphData>({ nodes: [], links: [] })
     const [dimensions, setDimensions] = useState({ width: 0, height: 0 })
@@ -55,6 +68,7 @@ export default function GoalGraph({ initialGoal, onNodeClick, focusedNodeId }: G
     const [tick, setTick] = useState(0);
     const [isCanvasReady, setIsCanvasReady] = useState(false);
     const [isHoveringNode, setIsHoveringNode] = useState(false);
+    const [hoveredNode, setHoveredNode] = useState<any>(null);
 
     // 1. EKRAN BOYUTU
     useEffect(() => {
@@ -69,38 +83,53 @@ export default function GoalGraph({ initialGoal, onNodeClick, focusedNodeId }: G
         return () => resizeObserver.disconnect();
     }, []);
 
-    // 2. KAMERA MERKEZLEME (Resize Sırasında)
-    useEffect(() => {
-        if (graphRef.current && dimensions.width > 0) {
-            // Ekrana sığdırma mantığı
-            const maxRadius = 650;
-            const padding = 50;
-            const minDim = Math.min(dimensions.width, dimensions.height);
-            const safeScale = minDim / ((maxRadius + padding) * 2);
-            const finalScale = Math.min(Math.max(safeScale, 0.2), 1.0);
+    // 2. KAMERA VE SAHNE KONTROLÜ (ROOT MERKEZLİ ZOOM)
+    // 2. KAMERA VE SAHNE KONTROLÜ (ROOT MERKEZLİ ZOOM)
+    const fitToRoot = useCallback((duration: number = 1000) => {
+        if (!graphRef.current || dimensions.width === 0 || data.nodes.length === 0) return;
 
-            graphRef.current.centerAt(0, 0, 200);
-            graphRef.current.zoom(finalScale, 200);
-        }
-    }, [dimensions]);
+        // 1. En uzak düğüm mesafesini bul (Max Radius)
+        let maxDist = 0;
+        data.nodes.forEach((node) => {
+            const dist = Math.sqrt(Math.pow(node.x || 0, 2) + Math.pow(node.y || 0, 2));
+            if (dist > maxDist) maxDist = dist;
+        });
+        if (maxDist === 0) maxDist = 150;
+
+        // 2. İdeal Zoom Hesabı
+        const minDimension = Math.min(dimensions.width, dimensions.height);
+        const padding = 100;
+        const fitRatio = minDimension / ((maxDist * 2) + padding);
+        const finalZoom = Math.min(Math.max(fitRatio, 0.2), 1.2);
+
+        // 3. Uygula
+        graphRef.current.centerAt(0, 0, duration);
+        graphRef.current.zoom(finalZoom, duration);
+
+        // Kamera yerleştiğinde canvas'ı görünür yap
+        setIsCanvasReady(true);
+    }, [dimensions, data]);
+
+    // Ekran boyutu değişirse güncelle
+    useEffect(() => {
+        fitToRoot(500);
+    }, [dimensions, fitToRoot]);
 
     // 3. ANİMASYON DÖNGÜSÜ
     useEffect(() => {
         if (animationStartTime.current > 0) {
             let frameId: number;
 
-            // Görünürlüğü hafif gecikmeli aç (flash önleme)
-            setTimeout(() => setIsCanvasReady(true), 100);
+
+
+            // Görünürlüğü fitToRoot kontrol eder
 
             const loop = () => {
                 const now = Date.now();
                 const elapsed = now - animationStartTime.current;
 
-                // 10 saniye boyunca render et (Animasyonlar bitene kadar)
-                if (elapsed < 10000) {
-                    setTick(t => t + 1);
-                    frameId = requestAnimationFrame(loop);
-                }
+                setTick(t => t + 1);
+                frameId = requestAnimationFrame(loop);
             };
 
             loop();
@@ -112,94 +141,98 @@ export default function GoalGraph({ initialGoal, onNodeClick, focusedNodeId }: G
     useEffect(() => {
         const controller = new AbortController();
 
-        async function fetchData() {
-            if (!initialGoal) return;
-            setIsLoading(true);
-            setIsCanvasReady(false);
-            animationStartTime.current = 0; // Reset
+        async function initGraph() {
+            let apiData: GoalGraphData | null = null;
 
-            // Temizle
-            setData({ nodes: [], links: [] });
+            // SENARYO 1: Veri Zaten Var (DB'den geldi)
+            if (initialData) {
+                apiData = initialData;
+            }
+            // SENARYO 2: Veri Yok, API'den Çek (Eski Davranış - Fallback)
+            else if (initialGoal) {
+                setIsLoading(true);
+                setIsCanvasReady(false);
+                animationStartTime.current = 0;
+                setData({ nodes: [], links: [] });
 
-            try {
-                const response = await fetch('/api/generate', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ prompt: initialGoal }),
-                    signal: controller.signal
-                });
+                try {
+                    const response = await fetch('/api/generate', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ prompt: initialGoal }),
+                        signal: controller.signal
+                    });
 
-                if (!response.ok) throw new Error('Network response was not ok');
+                    if (!response.ok) throw new Error('Network response was not ok');
 
-                const apiData: GoalGraphData = await response.json();
-                if (controller.signal.aborted) return;
+                    const resJson = await response.json();
 
-                // --- LAYOUT ENGINE ---
-                const nodes: GraphNode[] = apiData.nodes.map((node, i) => {
-                    const isRoot = node.id === 'root';
+                    if (resJson.roadmapId && !resJson.nodes) {
+                        console.log("Graph received ID only, waiting for redirect...", resJson.roadmapId);
+                        return;
+                    }
 
-                    const otherNodesCount = apiData.nodes.length - 1;
-                    const index = i - (apiData.nodes[0].id === 'root' ? 1 : 0);
-
-                    // Spiral / Çember Düzeni
-                    const angle = (index / Math.max(1, otherNodesCount)) * 2 * Math.PI - (Math.PI / 2);
-                    const radius = isRoot ? 0 : 500 + (Math.random() * 50);
-
-                    const fixedX = isRoot ? 0 : Math.cos(angle) * radius;
-                    const fixedY = isRoot ? 0 : Math.sin(angle) * radius;
-
-                    // Zamanlama
-                    const stepDuration = 1500;
-                    const rootDuration = 2000;
-
-                    const appearDelay = isRoot ? 0 : rootDuration + (index * stepDuration);
-                    const lineDelay = appearDelay + 1000;
-
-                    return {
-                        ...node,
-                        isRoot,
-                        // Pozisyonu sabitle
-                        x: fixedX,
-                        y: fixedY,
-                        fx: fixedX,
-                        fy: fixedY,
-                        // "Fake Drag" için orijinal konumu sakla
-                        originalX: fixedX,
-                        originalY: fixedY,
-
-                        delay: appearDelay,
-                        lineDelay: lineDelay
-                    };
-                });
-
-                const links: GraphLink[] = apiData.links.map(link => ({
-                    source: link.source,
-                    target: link.target
-                }));
-
-                setData({ nodes, links });
-                animationStartTime.current = Date.now();
-
-                // İlk Kamera Ayarı
-                if (graphRef.current) {
-                    graphRef.current.centerAt(0, 0, 0);
-                    graphRef.current.zoom(0.6, 0);
-                }
-
-            } catch (error: any) {
-                if (error.name === 'AbortError') return;
-                console.error("Error:", error);
-            } finally {
-                if (!controller.signal.aborted) {
-                    setIsLoading(false);
+                    apiData = resJson as GoalGraphData;
+                    if (controller.signal.aborted) return;
+                } catch (error: any) {
+                    if (error.name === 'AbortError') return;
+                    console.error("Error:", error);
+                } finally {
+                    if (!controller.signal.aborted) setIsLoading(false);
                 }
             }
+
+            if (!apiData) return;
+
+            // --- LAYOUT MOTORU (Veriyi Görselleştir) ---
+            const nodes: GraphNode[] = apiData.nodes.map((node, i) => {
+                const isRoot = node.id === 'root' || (i === 0 && !apiData?.nodes.some(n => n.id === 'root'));
+                const isLayoutRoot = i === 0;
+
+                const otherNodesCount = apiData!.nodes.length - 1;
+                const index = i - 1;
+
+                // Spiral / Çember Düzeni
+                const angle = (index / Math.max(1, otherNodesCount)) * 2 * Math.PI - (Math.PI / 2);
+                const radius = isLayoutRoot ? 0 : 500 + (Math.random() * 50);
+
+                const fixedX = isLayoutRoot ? 0 : Math.cos(angle) * radius;
+                const fixedY = isLayoutRoot ? 0 : Math.sin(angle) * radius;
+
+                // Zamanlama
+                const stepDuration = 1500;
+                const rootDuration = 2000;
+
+                // GECİKME MANTIĞI: Yeni ise sıralı, değilse -3000 (Hemen bitmiş gibi)
+                const appearDelay = (isNew) ? (isLayoutRoot ? 0 : rootDuration + (index * stepDuration)) : -3000;
+                const lineDelay = (isNew) ? (isLayoutRoot ? 0 : appearDelay + 1000) : -3000;
+
+                return {
+                    ...node,
+                    isRoot: isLayoutRoot,
+                    x: fixedX,
+                    y: fixedY,
+                    fx: fixedX,
+                    fy: fixedY,
+                    originalX: fixedX,
+                    originalY: fixedY,
+                    delay: appearDelay,
+                    lineDelay: lineDelay
+                };
+            });
+
+            const links: GraphLink[] = apiData.links.map(link => ({
+                source: link.source,
+                target: link.target
+            }));
+
+            setData({ nodes, links });
+            animationStartTime.current = Date.now();
         }
-        fetchData();
 
+        initGraph();
         return () => controller.abort();
-    }, [initialGoal]);
-
+    }, [initialGoal, initialData, isNew]);
 
     // --- PAINTERS (ÇİZİM FONKSİYONLARI) ---
 
@@ -207,8 +240,6 @@ export default function GoalGraph({ initialGoal, onNodeClick, focusedNodeId }: G
         if (focusedNodeId) return;
 
         // RENDERER LOCK:
-        // Force the node to strictly obey its fixed layout coordinates.
-        // This overrides any potential drag delta or physics drift.
         if (Number.isFinite(node.fx)) node.x = node.fx;
         if (Number.isFinite(node.fy)) node.y = node.fy;
 
@@ -226,16 +257,28 @@ export default function GoalGraph({ initialGoal, onNodeClick, focusedNodeId }: G
         const t = Math.min(age / duration, 1);
         const ease = 1 - Math.pow(2, -10 * t); // Exponential Ease Out
 
-        let currentScale = 3 - (2 * ease); // Büyükten küçüğe in
+        let initialScale = 3 - (2 * ease);
         let opacity = ease;
 
-        if (t === 1) currentScale = 1;
+        if (t === 1) initialScale = 1;
+
+        // Interaction Scale (Soft Grow)
+        const isHovered = hoveredNode && node.id === hoveredNode.id;
+        const targetScale = isHovered ? 1.15 : 1;
+
+        // Initialize or maintain current scale
+        node.currentScale = node.currentScale || 1;
+        // Smoothly interpolate towards target
+        node.currentScale += (targetScale - node.currentScale) * 0.1;
+
+        // Combine entrance animation with hover effect
+        const finalScale = initialScale * node.currentScale;
 
         const fontSize = (node.isRoot ? 24 : 12) / globalScale;
 
         ctx.save();
         ctx.translate(node.x, node.y);
-        ctx.scale(currentScale, currentScale);
+        ctx.scale(finalScale, finalScale);
 
         ctx.font = `${node.isRoot ? 'bold' : 'normal'} ${fontSize}px Inter, sans-serif`;
         ctx.fillStyle = `rgba(255, 255, 255, ${opacity})`;
@@ -282,20 +325,32 @@ export default function GoalGraph({ initialGoal, onNodeClick, focusedNodeId }: G
         const currentX = sourceNode.x + (targetNode.x - sourceNode.x) * ease;
         const currentY = sourceNode.y + (targetNode.y - sourceNode.y) * ease;
 
+        // NEFES ALMA EFEKTİ
+        const isConnected = hoveredNode && (link.source.id === hoveredNode.id || link.target.id === hoveredNode.id);
+        let strokeStyle;
+        let lineWidth = 1 / globalScale;
+
+        if (isConnected) {
+            // Daha sönük ve yavaş nefes alma (Range: 0.2 - 0.5)
+            const breathe = 0.35 + 0.15 * Math.sin(Date.now() / 500);
+            strokeStyle = `rgba(255, 255, 255, ${breathe})`;
+            lineWidth = 2 / globalScale;
+        } else {
+            // Gradient Çizgi (Normal)
+            const gradient = ctx.createLinearGradient(sourceNode.x, sourceNode.y, targetNode.x, targetNode.y);
+            gradient.addColorStop(0, "rgba(255, 255, 255, 0.05)");
+            gradient.addColorStop(1, "rgba(255, 255, 255, 0.3)");
+            strokeStyle = gradient;
+        }
+
         ctx.beginPath();
         ctx.moveTo(sourceNode.x, sourceNode.y);
         ctx.lineTo(currentX, currentY);
-        ctx.lineWidth = 1 / globalScale;
-
-        // Gradient Çizgi
-        const gradient = ctx.createLinearGradient(sourceNode.x, sourceNode.y, targetNode.x, targetNode.y);
-        gradient.addColorStop(0, "rgba(255, 255, 255, 0.05)");
-        gradient.addColorStop(1, "rgba(255, 255, 255, 0.3)");
-        ctx.strokeStyle = gradient;
-
+        ctx.lineWidth = lineWidth;
+        ctx.strokeStyle = strokeStyle;
         ctx.stroke();
 
-    }, [focusedNodeId, tick]);
+    }, [focusedNodeId, tick, hoveredNode]);
 
     const nodePointerAreaPaint = useCallback((node: any, color: string, ctx: CanvasRenderingContext2D) => {
         if (focusedNodeId) return;
@@ -330,16 +385,7 @@ export default function GoalGraph({ initialGoal, onNodeClick, focusedNodeId }: G
             onMouseDownCapture={killEvent}
             onTouchStartCapture={killEvent}
             onWheelCapture={killEvent}
-            onContextMenuCapture={killEvent}
         >
-            {isLoading && (
-                <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-50">
-                    <div className="text-cyan-200/50 animate-pulse text-sm tracking-widest font-mono">
-                        CONSTRUCTING NEURAL PATHWAYS...
-                    </div>
-                </div>
-            )}
-
             {dimensions.width > 0 && (
                 <div className={`w-full h-full transition-opacity duration-1000 ${isCanvasReady ? 'opacity-100' : 'opacity-0'}`}>
                     <ForceGraph2D
@@ -354,32 +400,32 @@ export default function GoalGraph({ initialGoal, onNodeClick, focusedNodeId }: G
                         nodePointerAreaPaint={nodePointerAreaPaint}
 
                         // --- KİLİTLEME MANTIĞI ---
-
-                        // 1. Sürüklemeyi AÇIYORUZ (Evet, açıyoruz)
-                        // Neden? Çünkü kapalıyken olay arkaplana düşüp Pan yapıyor.
                         enableNodeDrag={true}
 
                         // 2. Ama sürükleme anında konumu SIFIRLIYORUZ
                         onNodeDrag={(node: any) => {
-                            // Düğümü orijinal yerine geri çivile (Hareket edemez)
                             if (node.originalX !== undefined) {
                                 node.fx = node.originalX;
                                 node.fy = node.originalY;
                             }
                         }}
 
-                        // Diğer etkileşimler kapalı
-                        enableZoom={false}
-                        enablePan={false}
+                        // Diğer etkileşimler
+                        enableZoom={true} // Zoom serbest bırakıldı
+                        enablePan={true}  // Pan serbest bırakıldı
 
-                        // Fiziği Devre Dışı Bırak (Biz zaten fx/fy ile konumları verdik)
-                        d3AlphaDecay={1}
-                        d3VelocityDecay={1}
-                        cooldownTicks={0}
+                        d3AlphaDecay={0.01}
+                        d3VelocityDecay={0.1}
+
+                        // NOT: onEngineStop KALDIRILDI çünkü kamera kontrolünü biz yapıyoruz (fitToRoot)
+                        // NOT: onEngineStop KALDIRILDI çünkü kamera kontrolünü biz yapıyoruz (fitToRoot)
+                        cooldownTicks={isNew ? 100 : 0}
+                        warmupTicks={isNew ? 0 : 100}
+                        onEngineStop={() => fitToRoot(isNew ? 1000 : 0)}
 
                         onNodeHover={(node: any) => {
-                            // Firewall için hover durumunu güncelle
                             setIsHoveringNode(!!node);
+                            setHoveredNode(node || null);
                             if (containerRef.current) {
                                 containerRef.current.style.cursor = node ? 'pointer' : 'default';
                             }

@@ -1,0 +1,37 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+model Roadmap {
+  id        String   @id @default(uuid())
+  title     String
+  goal      String   // The initial prompt
+  isPinned  Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  nodes     Node[]
+}
+
+model Node {
+  id          String   @id @default(uuid())
+  title       String
+  description String?
+  status      String   @default("pending")
+  progress    Int      @default(0)
+  
+  // Hierarchy
+  parentId    String?
+  parent      Node?    @relation("NodeToChildren", fields: [parentId], references: [id])
+  children    Node[]   @relation("NodeToChildren")
+
+  roadmapId   String
+  roadmap     Roadmap  @relation(fields: [roadmapId], references: [id], onDelete: Cascade)
+
+  // Rich Content (stored as JSON string)
+  widgets     String? 
+}

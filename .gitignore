@@ -30,8 +30,15 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
+# Database
+*.db
+*.sqlite
+prisma/dev.db
+prisma/dev.db-journal
+
 # local env files (Kişisel anahtarlar - ASLA YÜKLEME)
 .env*.local
+.env
 
 # development
 .env.development.local
@@ -49,3 +56,7 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+/lib/generated/prisma
+
+
