@@ -2,9 +2,10 @@
 
 import { useState, useEffect } from "react"
 import { motion, AnimatePresence } from "framer-motion"
-import { Menu, X, Plus, MessageSquare, MoreVertical, Pin, Trash2, Edit2, Check, User, Activity } from "lucide-react"
+import { Menu, X, Plus, MessageSquare, MoreVertical, Pin, Trash2, Edit2, Check, User, Activity, LogOut, Settings, ChevronUp } from "lucide-react"
 import Link from "next/link"
 import { useRouter, useParams } from "next/navigation"
+import { signOut, useSession } from "next-auth/react"
 
 interface RoadmapItem {
     id: string
@@ -16,6 +17,8 @@ interface RoadmapItem {
 export default function Sidebar() {
     const router = useRouter()
     const params = useParams()
+    const { data: session } = useSession()
+    console.log("Current Sidebar Session Data:", session); // DEBUG: Check if name is present
     const [isOpen, setIsOpen] = useState(false)
     const [items, setItems] = useState<RoadmapItem[]>([])
     const [isLoading, setIsLoading] = useState(true)
@@ -25,6 +28,7 @@ export default function Sidebar() {
     const [editTitle, setEditTitle] = useState("")
     const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null)
     const [activeMenuId, setActiveMenuId] = useState<string | null>(null) // Dropdown open state
+    const [isUserMenuOpen, setIsUserMenuOpen] = useState(false)
 
     // 1. Fetch History
     const fetchHistory = async () => {
@@ -124,7 +128,7 @@ export default function Sidebar() {
                         <Activity className="w-6 h-6 text-cyan-400" />
                         <div>
                             <h2 className="text-xl font-bold text-white tracking-wide">Nora</h2>
-                            <p className="text-xs text-white/50 uppercase tracking-widest">AI Life Navigator</p>
+                            <p className="text-xs text-white/50 uppercase tracking-widest">AI Life Assistant</p>
                         </div>
                     </div>
 
@@ -217,17 +221,50 @@ export default function Sidebar() {
                 </div>
 
                 {/* USER FOOTER */}
-                <div className="p-4 border-t border-white/10 bg-black/20">
-                    <button className="flex items-center gap-3 w-full p-2 rounded-lg hover:bg-white/5 transition-colors group">
+                <div className="p-4 border-t border-white/10 bg-black/20 relative">
+                    <AnimatePresence>
+                        {isUserMenuOpen && (
+                            <>
+                                {/* Click Outside Closer */}
+                                <div className="fixed inset-0 z-40" onClick={() => setIsUserMenuOpen(false)} />
+
+                                <motion.div
+                                    initial={{ y: 20, opacity: 0 }}
+                                    animate={{ y: 0, opacity: 1 }}
+                                    exit={{ y: 20, opacity: 0 }}
+                                    className="absolute bottom-full left-0 w-[calc(100%-32px)] mx-4 mb-2 bg-[#1A1A1A] border border-white/10 rounded-xl shadow-2xl z-50 overflow-hidden"
+                                >
+                                    <button className="flex items-center gap-3 w-full px-4 py-3 text-sm text-white/70 hover:bg-white/5 hover:text-white transition-colors">
+                                        <Settings size={16} />
+                                        Settings
+                                    </button>
+                                    <div className="h-px bg-white/5 mx-4" />
+                                    <button
+                                        onClick={() => signOut({ callbackUrl: "/login" })}
+                                        className="flex items-center gap-3 w-full px-4 py-3 text-sm text-red-400 hover:bg-red-500/10 transition-colors"
+                                    >
+                                        <LogOut size={16} />
+                                        Log Out
+                                    </button>
+                                </motion.div>
+                            </>
+                        )}
+                    </AnimatePresence>
+
+                    <button
+                        onClick={() => setIsUserMenuOpen(!isUserMenuOpen)}
+                        className={`flex items-center gap-3 w-full p-2 rounded-lg transition-all group ${isUserMenuOpen ? 'bg-white/10' : 'hover:bg-white/5'}`}
+                    >
                         <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-cyan-500 to-purple-500 p-[1px]">
                             <div className="w-full h-full rounded-full bg-black flex items-center justify-center">
                                 <User size={16} className="text-white" />
                             </div>
                         </div>
                         <div className="flex-1 text-left">
-                            <p className="text-sm font-medium text-white group-hover:text-cyan-400 transition-colors">User</p>
-                            <p className="text-xs text-white/40">Free Plan</p>
+                            <p className="text-sm font-medium text-white group-hover:text-cyan-400 transition-colors">{session?.user?.name || "Explorer"}</p>
+                            <p className="text-xs text-white/40">{session?.user?.email || "Free Plan"}</p>
                         </div>
+                        <ChevronUp size={16} className={`text-white/30 transition-transform ${isUserMenuOpen ? 'rotate-180' : ''}`} />
                     </button>
                 </div>
             </motion.div>

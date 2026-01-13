@@ -1,9 +1,19 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
+import { auth } from "@/auth";
 
 export async function GET() {
     try {
+        const session = await auth();
+        if (!session || !session.user) {
+            return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+        }
+
         const history = await prisma.roadmap.findMany({
+            where: {
+                // @ts-ignore
+                userId: session.user.id
+            },
             orderBy: [
                 { isPinned: 'desc' },
                 { updatedAt: 'desc' }

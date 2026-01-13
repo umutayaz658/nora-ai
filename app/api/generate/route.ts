@@ -1,24 +1,8 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { NextResponse } from "next/server";
 import { GoalGraphData } from "@/types/goal";
-
-// --- PRISMA CLIENT SETUP (SAFE) ---
-// Initialize safely to prevent runtime crash if generation failed
-let prisma: any = null;
-try {
-    // Dynamic require to prevent crash if module is missing/corrupt
-    // @ts-ignore
-    const { PrismaClient } = require("@prisma/client");
-
-    // @ts-ignore
-    const globalForPrisma = global as unknown as { prisma: any };
-    // @ts-ignore
-    prisma = globalForPrisma.prisma || new PrismaClient();
-    // @ts-ignore
-    if (process.env.NODE_ENV !== "production") globalForPrisma.prisma = prisma;
-} catch (e) {
-    console.warn("Prisma Client failed to initialize. Persistence disabled.", e);
-}
+import prisma from "@/lib/prisma";
+import { auth } from "@/auth";
 
 // --- CONFIG ---
 const apiKey = process.env.GOOGLE_API_KEY;
@@ -86,6 +70,11 @@ Expected Output: A single object of type 'GoalGraphData'.
 
 export async function POST(req: Request) {
     try {
+        const session = await auth();
+        if (!session || !session.user) {
+            return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+        }
+
         const { prompt } = await req.json();
 
         // 1. Validate Config
@@ -109,7 +98,9 @@ export async function POST(req: Request) {
                 const roadmap = await prisma.roadmap.create({
                     data: {
                         title: prompt,
-                        goal: prompt
+                        goal: prompt,
+                        // @ts-ignore
+                        userId: session.user.id // Type should be correct now
                     }
                 });
 
