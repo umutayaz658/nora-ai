@@ -21,6 +21,8 @@ model Roadmap {
   title     String
   goal      String
   isPinned  Boolean  @default(false)
+  status    String   @default("planning") // "planning" | "completed"
+  messages  String?  // JSON string of chat history
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   nodes     Node[]

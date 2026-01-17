@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react"
 import { motion, AnimatePresence } from "framer-motion"
-import { Menu, X, Plus, MessageSquare, MoreVertical, Pin, Trash2, Edit2, Check, User, Activity, LogOut, Settings, ChevronUp } from "lucide-react"
+import { Home, Map, Settings, LogOut, ChevronUp, Plus, Trash2, Edit2, Check, X, User, Activity, MessageSquare, Target, Menu, MoreVertical, Pin } from "lucide-react"
 import Link from "next/link"
 import { useRouter, useParams } from "next/navigation"
 import { signOut, useSession } from "next-auth/react"
@@ -12,6 +12,7 @@ interface RoadmapItem {
     title: string
     isPinned: boolean
     updatedAt: string
+    status: string
 }
 
 export default function Sidebar() {
@@ -47,6 +48,12 @@ export default function Sidebar() {
 
     useEffect(() => {
         fetchHistory()
+
+        // Listen for global updates
+        const handleUpdate = () => fetchHistory();
+        window.addEventListener("roadmap_updated", handleUpdate);
+
+        return () => window.removeEventListener("roadmap_updated", handleUpdate);
     }, [])
 
     // 2. Actions
@@ -154,7 +161,13 @@ export default function Sidebar() {
                         <div key={item.id} className="group relative flex items-center gap-2 p-2 rounded-lg hover:bg-white/5 transition-colors">
                             {/* Icon */}
                             <div className="text-white/40 group-hover:text-white/70">
-                                {item.isPinned ? <Pin size={14} className="text-cyan-400" /> : <MessageSquare size={16} />}
+                                {item.isPinned ? (
+                                    <Pin size={14} className="text-cyan-400" />
+                                ) : item.status === 'completed' ? (
+                                    <Target size={16} className="text-purple-400" />
+                                ) : (
+                                    <MessageSquare size={16} />
+                                )}
                             </div>
 
                             {/* Title / Edit Input */}

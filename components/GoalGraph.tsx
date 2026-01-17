@@ -42,14 +42,15 @@ interface GoalGraphProps {
     initialData?: GoalGraphData; // PERSISTENCE: Data from DB
     onNodeClick?: (node: GoalNodeData) => void;
     focusedNodeId?: string | null;
+    shouldAnimate?: boolean;
 }
 
-export default function GoalGraph({ initialGoal, initialData, onNodeClick, focusedNodeId }: GoalGraphProps) {
+export default function GoalGraph({ initialGoal, initialData, onNodeClick, focusedNodeId, shouldAnimate = false }: GoalGraphProps) {
     const containerRef = useRef<HTMLDivElement>(null)
     const graphRef = useRef<any>(null)
     const searchParams = useSearchParams();
     // 1. Durumu dondur (URL değişse bile bu bileşen için 'yeni' kalmalı)
-    const [isNew] = useState(() => searchParams.get('new') === 'true');
+    const [isNew] = useState(() => shouldAnimate || searchParams.get('new') === 'true');
 
     // 2. URL'i temizle (Refresh atınca tekrar animasyon olmasın diye)
     useEffect(() => {

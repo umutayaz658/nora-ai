@@ -6,6 +6,7 @@ import Link from "next/link";
 import { ArrowLeft } from "lucide-react";
 import InteractiveRoadmap from "./InteractiveRoadmap";
 import Sidebar from "@/components/Sidebar";
+import PersistentChat from "@/components/PersistentChat";
 
 // --- GLOBAL PRISMA ---
 // @ts-ignore
@@ -38,7 +39,30 @@ export default async function RoadmapPage({ params }: { params: { id: string } }
         );
     }
 
-    // --- TRANSFORM DB FLAT NODES TO GRAPH ---
+    // --- SCENARIO 1: PLANNING (CHAT) ---
+    // @ts-ignore
+    // If status is 'planning' AND (importantly) we don't have generated nodes yet.
+    // If we have nodes, it means it's actually completed/generated (even if status says 'planning' due to glitch).
+    if (roadmap.status === "planning" && roadmap.nodes.length === 0) {
+        let history = [];
+        try {
+            // @ts-ignore
+            history = roadmap.messages ? JSON.parse(roadmap.messages) : [];
+        } catch (e) {
+            console.error("Failed to parse history", e);
+        }
+
+        return (
+            <main className="w-full h-screen bg-transparent relative overflow-hidden flex">
+                <Sidebar />
+                <div className="flex-1 relative z-10 w-full h-full flex flex-col items-center justify-center p-4">
+                    <PersistentChat initialHistory={history} roadmapId={id} />
+                </div>
+            </main>
+        );
+    }
+
+    // --- SCENARIO 2: COMPLETED (GRAPH) ---
     // Explicitly type 'n' as any to avoid build failure if Prisma types are missing
     const nodes: GoalNodeData[] = (roadmap.nodes as any[]).map((n: any) => {
         let widgets: GoalWidget[] = [];

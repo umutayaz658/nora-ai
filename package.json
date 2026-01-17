@@ -31,6 +31,7 @@
     "react-dom": "19.2.1",
     "react-force-graph-2d": "^1.29.0",
     "react-force-graph-3d": "^1.29.0",
+    "react-markdown": "^10.1.0",
     "react-tsparticles": "^2.12.2",
     "tailwind-merge": "^3.4.0",
     "three": "^0.182.0",

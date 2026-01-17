@@ -13,6 +13,7 @@ const model = genAI ? genAI.getGenerativeModel({ model: modelName }) : null;
 
 // --- MOCK DATA (Fallback) ---
 const MOCK_DATA: GoalGraphData = {
+    title: "System Error (Mock)",
     nodes: [
         {
             id: "root",
@@ -52,6 +53,7 @@ OUTPUT RULES:
 - Return ONLY valid JSON matching the schema below.
 - Do NOT use Markdown blocks (\`\`\`json). Just raw JSON.
 - Ensure all content (titles, descriptions, labels) is in English.
+- The "title" field in the root object MUST be a short, clear summary of the goal (e.g., "Learn Python", "Become a Pilot"). It must NEVER contain "User Context" or conversation history.
 
 TypeScript Schema Reference:
 type WidgetType = 'rich_text' | 'checklist' | 'progress_bar' | 'table' | 'resource_link';
@@ -64,7 +66,7 @@ interface ResourceLinkWidget { type: 'resource_link'; id: string; title: string;
 type GoalWidget = RichTextWidget | ChecklistWidget | ProgressBarWidget | TableWidget | ResourceLinkWidget;
 interface GoalNodeData { id: string; title: string; description: string; widgets: GoalWidget[]; status: 'pending' | 'in_progress' | 'completed'; progress: number; }
 interface GoalLinkData { source: string; target: string; }
-interface GoalGraphData { nodes: GoalNodeData[]; links: GoalLinkData[]; }
+interface GoalGraphData { title?: string; nodes: GoalNodeData[]; links: GoalLinkData[]; }
 Expected Output: A single object of type 'GoalGraphData'.
 `;
 
@@ -75,7 +77,22 @@ export async function POST(req: Request) {
             return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
         }
 
-        const { prompt } = await req.json();
+        const body = await req.json();
+
+        let prompt = "";
+
+        if (body.messages) {
+            // Context-aware generation
+            prompt = `
+User Context & Conversation History:
+${body.messages.map((m: any) => `${m.role.toUpperCase()}: ${m.content}`).join('\n')}
+
+Based on the final mutal agreement in this conversation, generate the strategic roadmap.
+            `;
+        } else {
+            // Legacy single prompt
+            prompt = body.prompt;
+        }
 
         // 1. Validate Config
         if (!model) {
@@ -84,7 +101,7 @@ export async function POST(req: Request) {
         }
 
         // 2. Generate Content
-        const msg = `User Goal: "${prompt}". Please generate a detailed, widget-rich strategic plan (GoalGraphData) for this goal.`;
+        const msg = `User Goal Context: "${prompt}". Please generate a detailed, widget-rich strategic plan (GoalGraphData) for this goal.`;
         const result = await model.generateContent([SYSTEM_PROMPT, msg]);
         const response = await result.response;
         const text = response.text();
@@ -94,19 +111,52 @@ export async function POST(req: Request) {
         // 3. Save to Database (Attempt)
         if (prisma) {
             try {
-                // Create the Roadmap container
-                const roadmap = await prisma.roadmap.create({
-                    data: {
-                        title: prompt,
-                        goal: prompt,
+                let roadmapId = body.roadmapId;
+
+                if (roadmapId) {
+                    // Update existing Planning Roadmap -> Completed
+
+                    // A. Check for custom title preservation
+                    const currentRoadmap = await prisma.roadmap.findUnique({
+                        where: { id: roadmapId },
+                        select: { title: true }
+                    });
+
+                    const DEFAULT_TITLE = "New Goal Planning";
+                    const isTitleCustomized = currentRoadmap && currentRoadmap.title !== DEFAULT_TITLE;
+
+                    // B. Update with logic
+                    // @ts-ignore
+                    await prisma.roadmap.update({
+                        where: { id: roadmapId },
+                        data: {
+                            // Only update title if it hasn't been customized by user
+                            title: isTitleCustomized ? undefined : (graphData.title || graphData.nodes[0].title || prompt.slice(0, 50)),
+                            goal: prompt,
+                            // @ts-ignore
+                            status: "completed"
+                        }
+                    });
+                } else {
+                    // Create new directly (Legacy flow)
+                    // @ts-ignore
+                    const roadmap = await prisma.roadmap.create({
                         // @ts-ignore
-                        userId: session.user.id // Type should be correct now
-                    }
-                });
+                        data: {
+                            title: graphData.title || graphData.nodes[0].title || prompt.slice(0, 50),
+                            goal: prompt,
+                            // @ts-ignore
+                            status: "completed",
+                            // @ts-ignore
+                            userId: session.user.id as string
+                        }
+                    });
+                    roadmapId = roadmap.id;
+                }
 
                 const idMap = new Map<string, string>(); // AI_ID -> DB_UUID
 
-                // First pass: Create Nodes
+                // First pass: Create Nodes linked to roadmapId
                 for (const node of graphData.nodes) {
                     const dbNode = await prisma.node.create({
                         data: {
@@ -115,7 +165,7 @@ export async function POST(req: Request) {
                             status: node.status || "pending",
                             progress: node.progress || 0,
                             widgets: JSON.stringify(node.widgets || []),
-                            roadmapId: roadmap.id
+                            roadmapId: roadmapId
                         }
                     });
                     idMap.set(node.id, dbNode.id);
@@ -135,7 +185,7 @@ export async function POST(req: Request) {
                 }
 
                 // Success: Return Persistent ID
-                return NextResponse.json({ roadmapId: roadmap.id });
+                return NextResponse.json({ roadmapId: roadmapId, nodes: graphData.nodes, links: graphData.links, title: graphData.title });
 
             } catch (dbError) {
                 console.error("Database persistence failed (falling back to ephemeral mode):", dbError);

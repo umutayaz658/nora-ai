@@ -86,6 +86,7 @@ export interface GoalLinkData {
 }
 
 export interface GoalGraphData {
+    title?: string;
     nodes: GoalNodeData[];
     links: GoalLinkData[];
 }
