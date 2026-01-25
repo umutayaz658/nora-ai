@@ -1,7 +1,8 @@
-import { GoalNodeData } from "@/types/goal";
+import { GoalNodeData, GoalWidget } from "@/types/goal";
 import { motion } from "framer-motion";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, Loader2, CheckCircle2, Activity, Clock, Trash2 } from "lucide-react";
 import WidgetRenderer from "./widgets/WidgetRenderer";
+import { useState, useEffect, useRef, useCallback } from "react";
 
 interface PlanetViewProps {
     node: GoalNodeData;
@@ -9,12 +10,92 @@ interface PlanetViewProps {
 }
 
 export default function PlanetView({ node, onBack }: PlanetViewProps) {
+    const [localWidgets, setLocalWidgets] = useState<GoalWidget[]>([]);
+    const [saveStatus, setSaveStatus] = useState<'idle' | 'pending' | 'saving' | 'saved'>('idle');
+
+    // Timer Ref for Manual Debounce
+    const timerRef = useRef<NodeJS.Timeout | null>(null);
+
+    // 1. SYNC INITIAL DATA (When node changes)
+    useEffect(() => {
+        if (!node) return;
+
+        let initial: GoalWidget[] = [];
+        if (node.widgets) {
+            if (typeof node.widgets === 'string') {
+                try {
+                    initial = JSON.parse(node.widgets);
+                } catch (e) {
+                    console.error("Failed to parse initial widgets:", e);
+                    initial = [];
+                }
+            } else if (Array.isArray(node.widgets)) { // Handle if it's already an array (rare but safe)
+                initial = node.widgets;
+            }
+        }
+        setLocalWidgets(initial);
+        setSaveStatus('idle'); // Reset status on new node
+    }, [node]);
+
+    // 2. SAVE FUNCTION
+    const performSave = async (widgetsToSave: GoalWidget[], nodeId: string) => {
+        setSaveStatus('saving');
+        try {
+            const res = await fetch(`/api/node/${nodeId}/widgets`, {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ widgets: widgetsToSave }),
+            });
+
+            if (res.ok) {
+                setSaveStatus('saved');
+                setTimeout(() => setSaveStatus('idle'), 2000);
+            } else {
+                console.error("Save failed response", res.status);
+                setSaveStatus('idle'); // or 'error'
+            }
+        } catch (error) {
+            console.error("Save error:", error);
+            setSaveStatus('idle');
+        }
+    };
+
+    // 3. UPDATE HANDLER (Manual Debounce)
+    const handleUpdateWidget = useCallback((updatedWidget: GoalWidget) => {
+        setLocalWidgets((prev) => {
+            const newWidgets = prev.map((w) => (w.id === updatedWidget.id ? updatedWidget : w));
+
+            // Debounce Logic
+            if (timerRef.current) clearTimeout(timerRef.current);
+            setSaveStatus('pending');
+
+            timerRef.current = setTimeout(() => {
+                performSave(newWidgets, node.id);
+            }, 500);
+
+            return newWidgets;
+        });
+    }, [node.id]);
+
+    // 4. DELETE HANDLER
+    const handleDeleteWidget = useCallback((widgetId: string) => {
+        setLocalWidgets((prev) => {
+            const newWidgets = prev.filter((w) => w.id !== widgetId);
+
+            if (timerRef.current) clearTimeout(timerRef.current);
+            setSaveStatus('pending');
+
+            timerRef.current = setTimeout(() => {
+                performSave(newWidgets, node.id);
+            }, 500);
+
+            return newWidgets;
+        });
+    }, [node.id]);
+
     if (!node) return null;
 
-    console.log("PlanetView render with:", node);
-
     return (
-        // OVERLAY CONTAINER: Transparent, Pass-through clicks
         <motion.div
             key={node.id}
             initial={{ opacity: 0 }}
@@ -38,8 +119,33 @@ export default function PlanetView({ node, onBack }: PlanetViewProps) {
                 initial={{ y: -100 }}
                 animate={{ y: 0 }}
                 transition={{ delay: 0.3, type: "spring" }}
-                className="absolute top-0 right-0 z-20 p-6 pointer-events-auto"
+                className="absolute top-0 right-0 z-20 p-6 pointer-events-auto flex items-center gap-4"
             >
+                {/* SAVE INDICATOR */}
+                <div className="flex items-center gap-2 transition-all duration-300 bg-black/40 px-4 py-2 rounded-full border border-white/5 backdrop-blur-md">
+                    {saveStatus === 'pending' && (
+                        <>
+                            <div className="w-2 h-2 rounded-full bg-yellow-400 animate-pulse" />
+                            <span className="text-[10px] uppercase tracking-widest text-yellow-400/80 font-bold">Unsaved</span>
+                        </>
+                    )}
+                    {saveStatus === 'saving' && (
+                        <>
+                            <Loader2 size={14} className="text-cyan-400 animate-spin" />
+                            <span className="text-[10px] uppercase tracking-widest text-cyan-400 font-bold">Saving...</span>
+                        </>
+                    )}
+                    {saveStatus === 'saved' && (
+                        <>
+                            <CheckCircle2 size={14} className="text-green-400" />
+                            <span className="text-[10px] uppercase tracking-widest text-green-400 font-bold">Saved</span>
+                        </>
+                    )}
+                    {saveStatus === 'idle' && (
+                        <span className="text-[10px] uppercase tracking-widest text-white/30 font-bold">Ready</span>
+                    )}
+                </div>
+
                 <button
                     onClick={onBack}
                     className="flex items-center gap-2 px-6 py-3 rounded-full bg-black/40 hover:bg-white/10 border border-white/10 backdrop-blur-md transition-all group"
@@ -76,24 +182,40 @@ export default function PlanetView({ node, onBack }: PlanetViewProps) {
 
                     {/* Widgets Grid - Holographic Panels */}
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8 auto-rows-min">
-                        {node.widgets && node.widgets.length > 0 ? (
-                            node.widgets.map((widget, i) => (
+                        {localWidgets && localWidgets.length > 0 ? (
+                            localWidgets.map((widget, i) => (
                                 <motion.div
                                     key={widget.id}
                                     initial={{ opacity: 0, y: 30 }}
                                     animate={{ opacity: 1, y: 0 }}
                                     transition={{ delay: 0.6 + (i * 0.1) }}
                                     className={`
+                                        relative group
                                         rounded-3xl overflow-hidden border border-white/10 bg-black/40 backdrop-blur-xl shadow-2xl
                                         hover:border-white/20 transition-colors duration-300
                                         ${widget.type === 'table' ? 'md:col-span-2 lg:col-span-3' : ''}
                                         ${widget.type === 'rich_text' ? 'md:col-span-2' : ''}
                                     `}
                                 >
+                                    {/* Delete Button (Hover) */}
+                                    <div className="absolute top-4 right-4 z-20 opacity-0 group-hover:opacity-100 transition-opacity">
+                                        <button
+                                            onClick={() => handleDeleteWidget(widget.id)}
+                                            className="p-2 bg-black/50 border border-white/10 rounded-full text-white/40 hover:text-red-400 hover:bg-red-500/10 transition-colors"
+                                        >
+                                            <Trash2 size={16} />
+                                        </button>
+                                    </div>
+
                                     {/* Holographic Top Line */}
                                     <div className="h-0.5 w-full bg-gradient-to-r from-transparent via-cyan-500/50 to-transparent opacity-50" />
                                     <div className="p-6">
-                                        <WidgetRenderer data={widget} />
+                                        <WidgetRenderer
+                                            data={widget}
+                                            onUpdate={handleUpdateWidget}
+                                            onDelete={() => handleDeleteWidget(widget.id)}
+                                            allWidgets={localWidgets}
+                                        />
                                     </div>
                                 </motion.div>
                             ))

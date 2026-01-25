@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useRef, useState, useCallback } from "react"
+import { useEffect, useRef, useState, useCallback, memo } from "react"
 import dynamic from "next/dynamic"
 import { useRouter, useSearchParams } from "next/navigation"
 import { GoalNodeData, GoalGraphData } from "@/types/goal"
@@ -45,7 +45,7 @@ interface GoalGraphProps {
     shouldAnimate?: boolean;
 }
 
-export default function GoalGraph({ initialGoal, initialData, onNodeClick, focusedNodeId, shouldAnimate = false }: GoalGraphProps) {
+function GoalGraph({ initialGoal, initialData, onNodeClick, focusedNodeId, shouldAnimate = false }: GoalGraphProps) {
     const containerRef = useRef<HTMLDivElement>(null)
     const graphRef = useRef<any>(null)
     const searchParams = useSearchParams();
@@ -441,3 +441,5 @@ export default function GoalGraph({ initialGoal, initialData, onNodeClick, focus
         </div>
     )
 }
+
+export default memo(GoalGraph);

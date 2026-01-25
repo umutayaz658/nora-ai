@@ -30,6 +30,7 @@ export interface ProgressBarWidget {
     currentValue: number;
     targetValue: number;
     unit: string; // Örn: "TL", "kg", "Sayfa"
+    linkedWidgetId?: string;
 }
 
 // 4. Tablo (Ders programı, bütçe vb.)
